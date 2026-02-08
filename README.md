@@ -31,14 +31,14 @@ gain_dB   = 35;                  % gain
 According to power spectrum shown on AirSpy SDR#, the signals were far from saturated at 35 dB.
 
 ### Reference image
-The whole desktop which was displayed on a monitor (1020*1080, 60Hz)
+The whole desktop which was displayed on a monitor (1020*1080, 60Hz).
 
 ![Reference](demo/img3.png)
 
 ---
 
 ### Reconstrcuted image, cut
-The image reconstructed from sampled EM signal, which was cut to 1920*1080
+The image reconstructed from sampled EM signal, which was cut to 1920*1080.
 
 ![Reference](demo/img3_cut.png)
 
