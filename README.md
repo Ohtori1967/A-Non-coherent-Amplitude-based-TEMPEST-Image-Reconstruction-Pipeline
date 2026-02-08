@@ -47,6 +47,6 @@ The image reconstructed from sampled EM signal, which was cut to 1920*1080
 ### Reconstrcuted image, original
 The original image reconstructed from sampled EM signal, with addition pixels added by HDMI protocol.
 
-![Reference](demo/img3_original.png)
+![Reference](demo/img3_origin.png)
 
 ---
