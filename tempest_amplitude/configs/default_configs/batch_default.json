@@ -1,0 +1,40 @@
+{
+  "input": {
+    "file_in": "../signals/example.mat",
+    "input_dir": "../signals",
+    "pattern": "*.mat",
+    "recursive": false
+  },
+  "output": {
+    "output_dir": "../outputs/run_batch",
+    "save_complex_npy": true,
+    "save_iq_png": true,
+    "save_amp_png": true,
+    "save_amp_gain_png": true,
+    "save_amp_log_gain_png": true,
+    "save_meta_json": true,
+    "copy_used_config": true
+  },
+  "signal": {
+    "Fs": 60000000.0,
+    "pixel_rate": 148500000.0,
+    "h_total": 2200,
+    "v_total": 1125,
+    "up": 99,
+    "down": 40
+  },
+  "processing": {
+    "BW": 16000000.0,
+    "numtaps": 129,
+    "dc_remove_len": 10000,
+    "freq_est_m": 2000,
+    "frame_idx": 0
+  },
+  "visualization": {
+    "gain_linear": 3.0,
+    "gain_log": 1.4,
+    "eps": 1e-8,
+    "percentile_low": 1,
+    "percentile_high": 99
+  }
+}
