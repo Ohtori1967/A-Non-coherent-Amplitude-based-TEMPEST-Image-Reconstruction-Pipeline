@@ -1,4 +1,4 @@
-function result = captureOneSlide(cfg, client, rx, slideMeta, sample_id)
+function result = captureOneSlide(cfg, client, rx, slideMeta, sample_id, attempt_idx)
 %CAPTUREONESLIDE Jump to one slide, confirm it, then capture.
 
     arguments
@@ -7,15 +7,18 @@ function result = captureOneSlide(cfg, client, rx, slideMeta, sample_id)
         rx
         slideMeta struct
         sample_id (1,1) double
+        attempt_idx (1,1) double = 1
     end
 
     targetSlide = slideMeta.slide_index;
 
-    % ---------- jump to target slide ----------
+    % =========================================================
+    % Jump to target slide
+    % =========================================================
     pptRemoteGoto(client, targetSlide);
     pause(cfg.ppt.settle_time_s);
 
-    % ---------- confirm current slide ----------
+    % Confirm current slide
     currentSlide = pptRemoteCurrent(client);
     if currentSlide ~= targetSlide
         error('captureOneSlide:SlideMismatch', ...
@@ -23,7 +26,9 @@ function result = captureOneSlide(cfg, client, rx, slideMeta, sample_id)
             targetSlide, currentSlide);
     end
 
-    % ---------- get PPT filename ----------
+    % =========================================================
+    % Get PPT filename
+    % =========================================================
     ppt_filename = "";
     try
         ppt_filename = pptRemoteFile(client);
@@ -33,40 +38,44 @@ function result = captureOneSlide(cfg, client, rx, slideMeta, sample_id)
         end
     end
 
-    % ---------- optional pause right before capture ----------
+    % Optional pause right before capture
     if isfield(cfg.general, 'pause_before_capture_s') && cfg.general.pause_before_capture_s > 0
         pause(cfg.general.pause_before_capture_s);
     end
 
-    % ---------- merge metadata ----------
+    % =========================================================
+    % Merge metadata
+    % =========================================================
     meta = slideMeta;
     meta.sample_id = sample_id;
     meta.slide_index = targetSlide;
     meta.confirmed_slide_index = currentSlide;
     meta.ppt_filename = char(ppt_filename);
+    meta.attempt_idx = attempt_idx;
 
-    % ----- display/content -----
     meta.content_type = char(cfg.meta_common.content_type);
     meta.font_name = char(cfg.meta_common.font_name);
     meta.font_size_pt = cfg.meta_common.font_size_pt;
     meta.theme = char(cfg.meta_common.theme);
     meta.batch_notes = char(cfg.meta_common.notes);
 
-    % ----- hardware / experiment setup -----
     meta.sdr_model = char(cfg.meta_common.sdr_model);
     meta.antenna_model = char(cfg.meta_common.antenna_model);
     meta.test_distance_cm = cfg.meta_common.test_distance_cm;
     meta.environment = char(cfg.meta_common.environment);
 
-    % ----- monitor/display info -----
     meta.monitor_model = char(cfg.meta_common.monitor_model);
     meta.monitor_resolution = char(cfg.meta_common.monitor_resolution);
     meta.monitor_refresh_hz = cfg.meta_common.monitor_refresh_hz;
 
-    % ---------- capture ----------
+    % =========================================================
+    % Capture
+    % =========================================================
     result = x310CaptureOnce(cfg, rx, cfg.general.out_dir, meta);
 
-    % ---------- attach summary fields for log ----------
+    % =========================================================
+    % Attach summary fields for logging
+    % =========================================================
     result.sample_id = sample_id;
     result.slide_index = targetSlide;
     result.content_id = getSlideField(slideMeta, 'content_id', "");
