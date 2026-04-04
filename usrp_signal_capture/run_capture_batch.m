@@ -3,8 +3,26 @@ clear; clc;
 cfg = config_capture();
 
 client = [];
+sourceCsv = "";
 
 try
+    % ---------- print key config ----------
+    fprintf('================ CONFIG SUMMARY ================\n');
+    fprintf('Fs                 : %.3f MSPS\n', cfg.sdr.fs / 1e6);
+    fprintf('Fc                 : %.3f MHz\n', cfg.sdr.fc / 1e6);
+    fprintf('Capture time       : %.3f s\n', cfg.sdr.capture_time_s);
+    fprintf('SamplesPerFrame    : %d\n', cfg.sdr.samplesPerFrame);
+    fprintf('Use warm-up        : %d\n', cfg.sdr.use_warmup);
+    fprintf('Warm-up frames     : %d\n', cfg.sdr.warmup_frames);
+    fprintf('Use prime frames   : %d\n', cfg.sdr.use_prime_frames);
+    fprintf('Prime frames       : %d\n', cfg.sdr.prime_frames);
+    fprintf('Prime first only   : %d\n', cfg.sdr.prime_only_on_first_attempt);
+    fprintf('Retry max          : %d\n', cfg.general.retry_max);
+    fprintf('Fail recreate thr. : %d\n', cfg.sdr.fail_recreate_threshold);
+    fprintf('1st transient mode : %d\n', cfg.sdr.enable_first_attempt_transient_mode);
+    fprintf('Cleanup stale samp.: %d\n', cfg.general.cleanup_uncheckpointed_samples);
+    fprintf('===============================================\n\n');
+
     % ---------- connect PPT remote ----------
     client = ppt_remote_client(cfg.ppt.server_ip, cfg.ppt.server_port);
 
@@ -37,13 +55,11 @@ try
 
         ppt_name = string(ppt_name);
 
-        % keep only base file name
         [~, nameOnly, ~] = fileparts(char(ppt_name));
         if ~isempty(nameOnly)
             ppt_name = string(nameOnly);
         end
 
-        % sanitize folder name
         ppt_name = regexprep(ppt_name, '[^\w\-]', '_');
         ppt_name = regexprep(ppt_name, '_+', '_');
         ppt_name = strip(ppt_name, '_');
@@ -84,11 +100,20 @@ try
 
     % ---------- optional resume filter ----------
     if cfg.general.resume_if_possible
-        [slideList, doneSlideIdx, sourceCsv, nextSampleId] = filterPendingSlides(cfg, slideList); %#ok<ASGLU>
+        [slideList, doneSlideIdx, sourceCsv, nextSampleId] = filterPendingSlides(cfg, slideList);
+
+        if strlength(sourceCsv) > 0
+            fprintf('Resume source CSV:\n%s\n', sourceCsv);
+        end
 
         if ~isempty(doneSlideIdx)
             fprintf('Completed slide indices already found:\n');
             disp(doneSlideIdx(:).');
+        end
+
+        % ---------- optional cleanup of stale artifacts ----------
+        if isfield(cfg.general, 'cleanup_uncheckpointed_samples') && cfg.general.cleanup_uncheckpointed_samples
+            cleanupUncheckpointedArtifacts(cfg, nextSampleId);
         end
     end
 
@@ -105,6 +130,7 @@ try
 
     disp(resultsTable);
     fprintf('Batch capture finished.\n');
+    fprintf('Merged final row count: %d\n', height(resultsTable));
     fprintf('Final CSV:\n%s\n', cfg.general.final_log_csv);
 
 catch ME
@@ -117,4 +143,59 @@ if ~isempty(client)
         clear client
     catch
     end
+end
+
+
+function cleanupUncheckpointedArtifacts(cfg, nextSampleId)
+%CLEANUPUNCHECKPOINTEDARTIFACTS Delete stale sample artifacts whose
+%sample_id >= nextSampleId before resuming capture.
+
+    outDir = cfg.general.out_dir;
+
+    if ~isfolder(outDir)
+        return;
+    end
+
+    fprintf('Checking for stale uncheckpointed artifacts in:\n%s\n', outDir);
+    fprintf('Any artifact with sample_id >= %d will be removed.\n', nextSampleId);
+
+    exts = {'.mat', '.png', '.json', '.txt', '.npy'};
+    deletedCount = 0;
+
+    files = dir(fullfile(outDir, 'sample_*'));
+    for k = 1:numel(files)
+        if files(k).isdir
+            continue;
+        end
+
+        fname = files(k).name;
+        [~, ~, ext] = fileparts(fname);
+
+        if ~ismember(lower(ext), exts)
+            continue;
+        end
+
+        tok = regexp(fname, '^sample_(\d+)_', 'tokens', 'once');
+        if isempty(tok)
+            continue;
+        end
+
+        sid = str2double(tok{1});
+        if isnan(sid)
+            continue;
+        end
+
+        if sid >= nextSampleId
+            fpath = fullfile(files(k).folder, files(k).name);
+            try
+                delete(fpath);
+                deletedCount = deletedCount + 1;
+                fprintf('  deleted: %s\n', fname);
+            catch ME
+                fprintf(2, '  failed to delete %s : %s\n', fname, ME.message);
+            end
+        end
+    end
+
+    fprintf('Cleanup finished. Deleted %d stale artifact(s).\n\n', deletedCount);
 end
