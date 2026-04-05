@@ -3,7 +3,6 @@ clear; clc;
 cfg = config_capture();
 
 client = [];
-sourceCsv = "";
 
 try
     % ---------- print key config ----------
@@ -97,21 +96,22 @@ try
     fprintf('Original slide count: %d\n', numel(slideList));
 
     nextSampleId = 1;
+    completedLog = table();
 
-    % ---------- optional resume filter ----------
+    % ---------- resume / rebuild from all checkpoints ----------
     if cfg.general.resume_if_possible
-        [slideList, doneSlideIdx, sourceCsv, nextSampleId] = filterPendingSlides(cfg, slideList);
+        [slideList, completedLog, nextSampleId] = filterPendingSlides(cfg, slideList);
 
-        if strlength(sourceCsv) > 0
-            fprintf('Resume source CSV:\n%s\n', sourceCsv);
+        if ~isempty(completedLog)
+            fprintf('Recovered completed rows from checkpoints: %d\n', height(completedLog));
+            if ismember("slide_index", string(completedLog.Properties.VariableNames))
+                doneSlideIdx = unique(completedLog.slide_index(~isnan(completedLog.slide_index)));
+                fprintf('Completed slide indices already found:\n');
+                disp(doneSlideIdx(:).');
+            end
         end
 
-        if ~isempty(doneSlideIdx)
-            fprintf('Completed slide indices already found:\n');
-            disp(doneSlideIdx(:).');
-        end
-
-        % ---------- optional cleanup of stale artifacts ----------
+        % ---------- cleanup stale sample artifacts after last checkpoint ----------
         if isfield(cfg.general, 'cleanup_uncheckpointed_samples') && cfg.general.cleanup_uncheckpointed_samples
             cleanupUncheckpointedArtifacts(cfg, nextSampleId);
         end
@@ -119,6 +119,13 @@ try
 
     if isempty(slideList)
         fprintf('All slides are already completed. Nothing to do.\n');
+
+        % still rebuild final log from checkpoints
+        finalTable = rebuildFinalLogFromCheckpoints(cfg);
+        if ~isempty(finalTable)
+            writetable(finalTable, cfg.general.final_log_csv);
+            fprintf('Rebuilt final CSV from checkpoints:\n%s\n', cfg.general.final_log_csv);
+        end
         return;
     end
 
@@ -130,7 +137,6 @@ try
 
     disp(resultsTable);
     fprintf('Batch capture finished.\n');
-    fprintf('Merged final row count: %d\n', height(resultsTable));
     fprintf('Final CSV:\n%s\n', cfg.general.final_log_csv);
 
 catch ME
@@ -198,4 +204,90 @@ function cleanupUncheckpointedArtifacts(cfg, nextSampleId)
     end
 
     fprintf('Cleanup finished. Deleted %d stale artifact(s).\n\n', deletedCount);
+end
+
+
+function T = rebuildFinalLogFromCheckpoints(cfg)
+%REBUILDFINALLOGFROMCHECKPOINTS Merge all incremental checkpoint CSVs.
+
+    if ~isfolder(cfg.general.checkpoint_dir)
+        T = table();
+        return;
+    end
+
+    files = dir(fullfile(cfg.general.checkpoint_dir, 'capture_checkpoint_*.csv'));
+    if isempty(files)
+        T = table();
+        return;
+    end
+
+    T = readtable(fullfile(files(1).folder, files(1).name), 'TextType', 'string');
+    for i = 2:numel(files)
+        Ti = readtable(fullfile(files(i).folder, files(i).name), 'TextType', 'string');
+        [T, Ti] = alignTablesByVariables(T, Ti);
+        T = [T; Ti]; %#ok<AGROW>
+    end
+
+    T = dedupResultTable(T);
+end
+
+
+function [A2, B2] = alignTablesByVariables(A, B)
+    varsA = string(A.Properties.VariableNames);
+    varsB = string(B.Properties.VariableNames);
+    allVars = unique([varsA, varsB], 'stable');
+
+    A2 = A;
+    B2 = B;
+
+    for v = allVars
+        vn = char(v);
+
+        if ~ismember(v, varsA)
+            A2.(vn) = defaultColumnForLike(B2, vn, height(A2));
+        end
+        if ~ismember(v, varsB)
+            B2.(vn) = defaultColumnForLike(A2, vn, height(B2));
+        end
+    end
+
+    A2 = A2(:, cellstr(allVars));
+    B2 = B2(:, cellstr(allVars));
+end
+
+
+function col = defaultColumnForLike(Tref, varName, nRows)
+    if ismember(varName, string(Tref.Properties.VariableNames))
+        sample = Tref.(varName);
+        if isstring(sample)
+            col = strings(nRows, 1);
+        elseif islogical(sample)
+            col = false(nRows, 1);
+        elseif isnumeric(sample)
+            col = nan(nRows, 1);
+        else
+            col = strings(nRows, 1);
+        end
+    else
+        col = strings(nRows, 1);
+    end
+end
+
+
+function T = dedupResultTable(T)
+    if isempty(T)
+        return;
+    end
+
+    if ismember("slide_index", string(T.Properties.VariableNames))
+        T = sortrows(T, "slide_index");
+        [~, ia] = unique(T.slide_index, 'last');
+        T = T(sort(ia), :);
+        T = sortrows(T, "slide_index");
+    elseif ismember("sample_id", string(T.Properties.VariableNames))
+        T = sortrows(T, "sample_id");
+        [~, ia] = unique(T.sample_id, 'last');
+        T = T(sort(ia), :);
+        T = sortrows(T, "sample_id");
+    end
 end
