@@ -10,10 +10,13 @@ function resultsTable = captureSlideList(cfg, client, slideList, startSampleId)
 %       1) common first-attempt transient failures
 %       2) hard formal failures (all formal frames invalid)
 %   - Progress bar / ETA
-%   - Final CSV merge from:
-%       * current-run rows
-%       * existing capture_log.csv in output dir
-%       * all checkpoint CSVs in checkpoints folder
+%   - Incremental checkpoints:
+%       * checkpoint_010 stores global sample 001-010
+%       * checkpoint_020 stores global sample 011-020
+%       * ...
+%   - Final CSV rebuilt from:
+%       * all existing checkpoint CSVs
+%       * current-run in-memory results
 
     arguments
         cfg struct
@@ -34,6 +37,7 @@ function resultsTable = captureSlideList(cfg, client, slideList, startSampleId)
     results = repmat(makeEmptyResultRow(), n, 1);
 
     t_batch = tic;
+    blockStartIdx = 1;
 
     fprintf('========================================\n');
     fprintf('Batch capture started.\n');
@@ -218,43 +222,49 @@ function resultsTable = captureSlideList(cfg, client, slideList, startSampleId)
 
         fprintf('%s\n', renderProgressLine(k, n, elapsed_item_s, elapsed_batch_s, avg_per_item_s, eta_s, eta_clock, bar_width));
 
-        % -------- checkpoint --------
+        % -------- incremental checkpoint with GLOBAL naming --------
         if mod(k, cfg.general.checkpoint_every) == 0 || k == n
-            results_partial = results(1:k);
-            checkpointTable = struct2table(results_partial);
+            results_block = results(blockStartIdx:k);
+            checkpointTable = struct2table(results_block);
+
+            blockStartSampleId = startSampleId + blockStartIdx - 1;
+            blockEndSampleId   = startSampleId + k - 1;
 
             checkpointMat = fullfile( ...
                 cfg.general.checkpoint_dir, ...
-                sprintf('capture_checkpoint_%03d.mat', k));
+                sprintf('capture_checkpoint_%03d.mat', blockEndSampleId));
 
             checkpointCsv = fullfile( ...
                 cfg.general.checkpoint_dir, ...
-                sprintf('capture_checkpoint_%03d.csv', k));
+                sprintf('capture_checkpoint_%03d.csv', blockEndSampleId));
 
-            save(checkpointMat, 'results_partial');
+            save(checkpointMat, 'results_block');
             writetable(checkpointTable, checkpointCsv);
 
-            fprintf('Checkpoint saved at item %03d\n', k);
+            fprintf('Checkpoint saved at global sample %03d (block sample %03d-%03d)\n', ...
+                blockEndSampleId, blockStartSampleId, blockEndSampleId);
             fprintf('  MAT: %s\n', checkpointMat);
             fprintf('  CSV: %s\n', checkpointCsv);
+
+            blockStartIdx = k + 1;
         end
     end
 
     % =========================================================
-    % Final merge from current run + all existing CSV logs
+    % Final CSV rebuild from all checkpoints + current run
     % =========================================================
     results_current = struct2table(results(1:n));
-    [resultsTable, mergeInfo] = mergeAllCsvResults(cfg, results_current);
+    [resultsTable, mergeInfo] = rebuildFinalLogFromAllCheckpoints(cfg, results_current);
 
     writetable(resultsTable, cfg.general.final_log_csv);
 
     fprintf('\n========================================\n');
     fprintf('Batch capture finished.\n');
     fprintf('Current-run rows      : %d\n', mergeInfo.current_rows);
-    fprintf('Existing CSV rows     : %d\n', mergeInfo.existing_rows);
+    fprintf('Existing checkpoint rows: %d\n', mergeInfo.existing_rows);
     fprintf('Merged rows           : %d\n', mergeInfo.merged_rows);
     fprintf('Dropped duplicates    : %d\n', mergeInfo.duplicate_rows_removed);
-    fprintf('Existing CSV files    : %d\n', mergeInfo.existing_file_count);
+    fprintf('Checkpoint CSV files  : %d\n', mergeInfo.existing_file_count);
     fprintf('Final CSV saved to:\n%s\n', cfg.general.final_log_csv);
     fprintf('========================================\n');
 end
@@ -334,7 +344,7 @@ function s = fmtDuration(sec)
 end
 
 
-function [T_out, info] = mergeAllCsvResults(cfg, T_new)
+function [T_out, info] = rebuildFinalLogFromAllCheckpoints(cfg, T_new)
     info = struct();
     info.current_rows = height(T_new);
     info.existing_rows = 0;
@@ -346,16 +356,6 @@ function [T_out, info] = mergeAllCsvResults(cfg, T_new)
     totalExistingRows = 0;
     existingFileCount = 0;
 
-    % ---- existing final capture_log.csv ----
-    finalCsv = string(cfg.general.final_log_csv);
-    if strlength(finalCsv) > 0 && isfile(finalCsv)
-        T_final = readtable(finalCsv, 'TextType', 'string');
-        allTables{end+1} = T_final; %#ok<AGROW>
-        totalExistingRows = totalExistingRows + height(T_final);
-        existingFileCount = existingFileCount + 1;
-    end
-
-    % ---- all checkpoint CSVs ----
     if strlength(string(cfg.general.checkpoint_dir)) > 0 && isfolder(cfg.general.checkpoint_dir)
         files = dir(fullfile(cfg.general.checkpoint_dir, 'capture_checkpoint_*.csv'));
 
