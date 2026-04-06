@@ -1,0 +1,28 @@
+{
+  "input_root_dir": "E:/UsersData/Desktop/tempest_batch/outputs",
+  "batch_dir_glob": "output_*",
+  "slide_dir_glob": "slide*",
+
+  "geometry_source_suffix": "_stack_vertical_f0_3_amp.png",
+  "variant_suffixes": {
+    "iq": "_stack_vertical_f0_3.png",
+    "amp": "_stack_vertical_f0_3_amp.png",
+    "amp_gain": "_stack_vertical_f0_3_amp_gain.png",
+    "amp_log_gain": "_stack_vertical_f0_3_amp_log_gain.png"
+  },
+
+  "frame_width": 2200,
+  "frame_height": 1125,
+
+  "s0_mode": "fixed",
+  "fixed_s0": 0.036313895136117935,
+
+  "export_blocks": [0],
+
+  "save_geometry_json": true,
+  "save_before_shear": false,
+  "overwrite": true,
+
+  "limit_batches": null,
+  "limit_slides_per_batch": null
+}
