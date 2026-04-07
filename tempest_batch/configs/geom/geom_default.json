@@ -14,7 +14,7 @@
   "frame_width": 2200,
   "frame_height": 1125,
 
-  "s0_mode": "fixed",
+  "s0_mode": "per_batch",
   "fixed_s0": 0.036313895136117935,
 
   "export_blocks": [0],
