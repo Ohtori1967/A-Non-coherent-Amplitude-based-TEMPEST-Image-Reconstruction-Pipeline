@@ -23,6 +23,7 @@ DEFAULT_ANCHOR_PARAMS: dict[str, Any] = {
     "top_search_band_ratio": 0.12,
     "top_edge_smooth_sigma": 2.0,
     "top_edge_prominence_ratio": 0.20,
+
     "intercept_search_x_min_ratio": 0.00,
     "intercept_search_x_max_ratio": 1.00,
     "intercept_y_margin_ratio": 0.05,
@@ -33,10 +34,20 @@ DEFAULT_ANCHOR_PARAMS: dict[str, Any] = {
     "intercept_refine_radius": 8,
     "intercept_refine_step": 1,
     "intercept_sample_step_y": 4,
+
     "anchor_track_local_radius": 24,
     "anchor_track_fallback_global": True,
+
     "crop_offset_x": 16,
     "crop_offset_y": 16,
+
+    # ----- New parameters for horizontal major-peak filtering -----
+    "row_resp_smooth_sigma": 3.0,
+    "min_peak_distance_ratio": 0.08,
+    "min_peak_prominence_ratio": 0.15,
+    "major_peak_ratio": 0.60,
+    "max_major_horizontal_peaks": 4,
+    "min_block_h_ratio": 0.08,
 }
 
 
@@ -55,7 +66,59 @@ def build_row_cumsum(img_sm: np.ndarray) -> np.ndarray:
     return row_cumsum
 
 
-def find_top_boundary_in_block(img_sm: np.ndarray, gy: np.ndarray, block: tuple[int, int], params: dict[str, Any]):
+def filter_major_horizontal_peaks(
+    peaks: np.ndarray,
+    peak_props: dict[str, np.ndarray],
+    major_ratio: float = 0.60,
+    max_peaks: int | None = 4,
+):
+    """
+    Keep only major horizontal peaks based on relative prominence.
+
+    Strategy:
+    1. Use peak prominence as the main ranking criterion.
+    2. Keep peaks whose prominence is above:
+           major_ratio * max(prominence)
+    3. Optionally keep only the top-K strongest peaks.
+
+    Returns:
+        filtered_peaks, filtered_peak_props
+    """
+    peaks = np.asarray(peaks)
+
+    if len(peaks) == 0:
+        return peaks, peak_props
+
+    prominences = np.asarray(peak_props.get("prominences", []), dtype=np.float32)
+    if len(prominences) != len(peaks):
+        raise ValueError("peak_props['prominences'] must have the same length as peaks")
+
+    max_prom = float(np.max(prominences))
+    thr = major_ratio * max_prom
+
+    keep = prominences >= thr
+    peaks_f = peaks[keep]
+
+    props_f: dict[str, np.ndarray] = {}
+    for k, v in peak_props.items():
+        props_f[k] = np.asarray(v)[keep]
+
+    if max_peaks is not None and len(peaks_f) > max_peaks:
+        order = np.argsort(props_f["prominences"])[::-1][:max_peaks]
+        order = np.sort(order)
+        peaks_f = peaks_f[order]
+        for k, v in props_f.items():
+            props_f[k] = v[order]
+
+    return peaks_f, props_f
+
+
+def find_top_boundary_in_block(
+    img_sm: np.ndarray,
+    gy: np.ndarray,
+    block: tuple[int, int],
+    params: dict[str, Any],
+):
     h, w = img_sm.shape
     y0, y1 = block
 
@@ -65,12 +128,18 @@ def find_top_boundary_in_block(img_sm: np.ndarray, gy: np.ndarray, block: tuple[
         return None
 
     row_resp_local = np.sum(np.abs(gy[yy0:yy1, :]), axis=1)
-    row_resp_local = gaussian_filter1d(row_resp_local, sigma=params["top_edge_smooth_sigma"])
+    row_resp_local = gaussian_filter1d(
+        row_resp_local, sigma=params["top_edge_smooth_sigma"]
+    )
 
     prominence = float(row_resp_local.max()) * params["top_edge_prominence_ratio"]
     peaks, _ = find_peaks(row_resp_local, prominence=prominence)
 
-    peak_local = int(np.argmax(row_resp_local)) if len(peaks) == 0 else int(peaks[np.argmax(row_resp_local[peaks])])
+    peak_local = (
+        int(np.argmax(row_resp_local))
+        if len(peaks) == 0
+        else int(peaks[np.argmax(row_resp_local[peaks])])
+    )
     y_top = yy0 + peak_local
 
     return {
@@ -141,7 +210,12 @@ def score_intercept_b_fast(
     }
 
 
-def compute_global_b_range(img_shape: tuple[int, int], block: tuple[int, int], s0: float, params: dict[str, Any]):
+def compute_global_b_range(
+    img_shape: tuple[int, int],
+    block: tuple[int, int],
+    s0: float,
+    params: dict[str, Any],
+):
     h, w = img_shape
     x_min = int(w * params["intercept_search_x_min_ratio"])
     x_max = int(w * params["intercept_search_x_max_ratio"])
@@ -169,7 +243,9 @@ def search_intercept_in_range(
     sample_step_y = params["intercept_sample_step_y"]
 
     coarse_scored: list[dict[str, Any]] = []
-    for b in np.arange(int(np.floor(b_min_search)), int(np.ceil(b_max_search)) + 1, coarse_step):
+    for b in np.arange(
+        int(np.floor(b_min_search)), int(np.ceil(b_max_search)) + 1, coarse_step
+    ):
         item = score_intercept_b_fast(
             img_sm=img_sm,
             gx=gx,
@@ -245,21 +321,27 @@ def search_intercept_in_block(
     fallback_global = params["anchor_track_fallback_global"]
 
     if prev_b is None:
-        res = search_intercept_in_range(img_sm, gx, row_cumsum, block, s0, params, global_range)
+        res = search_intercept_in_range(
+            img_sm, gx, row_cumsum, block, s0, params, global_range
+        )
         if res is None:
             return None
         res["search_mode"] = "global"
         return res
 
     local_range = (prev_b - local_radius, prev_b + local_radius)
-    res_local = search_intercept_in_range(img_sm, gx, row_cumsum, block, s0, params, local_range)
+    res_local = search_intercept_in_range(
+        img_sm, gx, row_cumsum, block, s0, params, local_range
+    )
     if res_local is not None:
         res_local["search_mode"] = "local"
         res_local["prev_b"] = float(prev_b)
         return res_local
 
     if fallback_global:
-        res_global = search_intercept_in_range(img_sm, gx, row_cumsum, block, s0, params, global_range)
+        res_global = search_intercept_in_range(
+            img_sm, gx, row_cumsum, block, s0, params, global_range
+        )
         if res_global is not None:
             res_global["search_mode"] = "fallback_global"
             res_global["prev_b"] = float(prev_b)
@@ -268,7 +350,11 @@ def search_intercept_in_block(
     return None
 
 
-def build_safe_crop_point(A_ref: tuple[float, float], polarity: int, params: dict[str, Any]):
+def build_safe_crop_point(
+    A_ref: tuple[float, float],
+    polarity: int,
+    params: dict[str, Any],
+):
     x_ref, y_ref = A_ref
     dx, dy = params["crop_offset_x"], params["crop_offset_y"]
 
@@ -293,7 +379,9 @@ def detect_anchor_for_block(
         return None
 
     y_top = top_res["y_top"]
-    intercept_res = search_intercept_in_block(img_sm, gx, row_cumsum, block, s0, params, prev_b=prev_b)
+    intercept_res = search_intercept_in_block(
+        img_sm, gx, row_cumsum, block, s0, params, prev_b=prev_b
+    )
     if intercept_res is None:
         return None
 
@@ -334,9 +422,33 @@ def detect_anchors_for_image(
     img_sm, gx, gy = compute_smoothed_and_gradients(img, blur_sigma=blur_sigma)
     row_cumsum = build_row_cumsum(img_sm)
 
-    row_resp = compute_row_response(gy, smooth_sigma=3.0)
-    peaks, peak_props = find_horizontal_peaks(row_resp, h=h)
-    blocks = build_blocks_from_peaks(peaks, h=h)
+    row_resp = compute_row_response(
+        gy,
+        smooth_sigma=params["row_resp_smooth_sigma"],
+    )
+
+    # Step 1: detect all candidate horizontal peaks
+    peaks_all, peak_props_all = find_horizontal_peaks(
+        row_resp,
+        h=h,
+        min_peak_distance_ratio=params["min_peak_distance_ratio"],
+        min_peak_prominence_ratio=params["min_peak_prominence_ratio"],
+    )
+
+    # Step 2: filter major peaks only
+    peaks, peak_props = filter_major_horizontal_peaks(
+        peaks=peaks_all,
+        peak_props=peak_props_all,
+        major_ratio=params["major_peak_ratio"],
+        max_peaks=params["max_major_horizontal_peaks"],
+    )
+
+    # Step 3: build blocks using filtered peaks
+    blocks = build_blocks_from_peaks(
+        peaks=peaks,
+        h=h,
+        min_block_h_ratio=params["min_block_h_ratio"],
+    )
 
     block_results: list[dict[str, Any]] = []
     prev_b: float | None = None
@@ -370,7 +482,13 @@ def detect_anchors_for_image(
         "gx": gx,
         "gy": gy,
         "row_resp": row_resp,
+
+        # Keep both raw and filtered peaks for debugging
+        "peaks_all": peaks_all,
+        "peak_props_all": peak_props_all,
         "peaks": peaks,
+        "peak_props": peak_props,
+
         "blocks": blocks,
         "block_results": block_results,
         "s0": s0,
@@ -390,7 +508,9 @@ def batch_detect_anchors(
     for img_path in tqdm(img_paths, desc="Detecting anchors"):
         slide_id = Path(img_path).parent.name
         try:
-            res = detect_anchors_for_image(img_path, s0=s0, params=params, blur_sigma=blur_sigma)
+            res = detect_anchors_for_image(
+                img_path, s0=s0, params=params, blur_sigma=blur_sigma
+            )
             all_results[str(img_path)] = res
 
             for br in res["block_results"]:
